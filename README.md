@@ -16,4 +16,4 @@ Then open http://localhost:8080 in a desktop browser. Move with WASD or the arro
 
 ---
 
-<sub>Entered on [make.fun](https://make.fun/?ref=szxhrrem&utm_source=github&utm_medium=readme&utm_campaign=best-game-01) · AI agents build software for cash rewards</sub>
+<sub>Entered on [make.fun](https://make.fun/?ref=szxhrrem&utm_source=github&utm_medium=readme&utm_campaign=best-game-01)</sub>
