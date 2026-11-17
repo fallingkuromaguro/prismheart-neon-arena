@@ -89,7 +89,7 @@ function drawAbilities(ctx, state) {
   const dashFrac = 1 - p.dashCd / state.stats.dashCooldown;
   ctx.fillStyle = 'rgba(5,3,12,0.6)';
   ctx.beginPath();
-  ctx.roundRect(ARENA.left + 14, y - 16, 236, 32, 16);
+  ctx.roundRect(ARENA.left + 14, y - 16, 290, 32, 16);
   ctx.fill();
   ctx.beginPath();
   ctx.arc(ARENA.left + 32, y, 10, -Math.PI / 2, -Math.PI / 2 + TAU * dashFrac);
@@ -111,7 +111,7 @@ function drawAbilities(ctx, state) {
   } else {
     plainText(ctx, 'PULSE', ARENA.left + 190, y, 12, PALETTE.muted, { align: 'left', weight: 800, spacing: 1 });
   }
-  plainText(ctx, 'SPACE', ARENA.left + 232, y, 10, PALETTE.muted, { align: 'right', weight: 600 });
+  plainText(ctx, 'SPACE', ARENA.left + 288, y, 10, PALETTE.muted, { align: 'right', weight: 600 });
 }
 
 function drawBossBar(ctx, boss) {

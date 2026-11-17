@@ -323,6 +323,8 @@ export function drawVictory(ctx, state, ui) {
     ['WAVES SURVIVED', `${WAVES.length} / ${WAVES.length}`, PALETTE.good],
     ['HOLLOW DESTROYED', String(state.kills)],
     ['LONGEST CHAIN', String(state.bestCombo)],
+    ['SHARDS GATHERED', String(state.shardsTaken)],
+    ['PULSES RELEASED', String(state.pulses)],
     ['HULL BONUS', `+${state.bonus.hull.toLocaleString('en-US')}`, PALETTE.player],
     ['HEART BONUS', `+${state.bonus.heart.toLocaleString('en-US')}`, PALETTE.heart],
     ['FINAL SCORE', state.score.toLocaleString('en-US'), PALETTE.shard],

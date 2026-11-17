@@ -13,6 +13,10 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const mode = process.argv[2] ?? 'shots';
 const PORT = 8199;
 const DEBUG_PORT = 9339;
+// This VM's Chromium blocks every load of 127.0.0.1 (local-network-access checks), so by default
+// the game is opened from disk; ES modules from file:// need --allow-file-access-from-files.
+// BASE=http://127.0.0.1:8199/ uses serve.ts instead, as on a normal machine.
+const BASE = process.env.BASE ?? `file://${root}game/index.html`;
 const CHROME = process.env.CHROME ?? '/opt/meta-chromium/chrome';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -24,8 +28,8 @@ writeFileSync(policyPath, 'hatch-webgl-allowed-domains-v1\n');
 const policySha = createHash('sha256').update(readFileSync(policyPath)).digest('hex');
 
 const server = spawn(process.execPath, [join(root, 'serve.ts'), '--port', String(PORT)], { stdio: 'ignore' });
-// Give serve.ts a moment to listen, then open Chrome on it directly: later navigations stay
-// same-origin, so Chrome's local-network checks never see a public page reaching for localhost.
+// Wait for serve.ts to listen. Each scene is then opened as a new browser-initiated tab
+// (/json/new): Chrome's local-network checks block a page-initiated navigation to 127.0.0.1.
 for (let i = 0; i < 100; i += 1) {
   try {
     if ((await fetch(`http://127.0.0.1:${PORT}/`)).ok) break;
@@ -35,9 +39,9 @@ for (let i = 0; i < 100; i += 1) {
 }
 const chrome = spawn(CHROME, [
   '--headless=new', '--no-sandbox', '--hide-scrollbars', '--mute-audio', '--no-first-run',
-  '--autoplay-policy=no-user-gesture-required', '--no-proxy-server', `--remote-debugging-port=${DEBUG_PORT}`,
+  '--autoplay-policy=no-user-gesture-required', '--no-proxy-server', ...(BASE.startsWith('file:') ? ['--allow-file-access-from-files'] : []), `--remote-debugging-port=${DEBUG_PORT}`,
   `--hatch-webgl-allowed-domains-file=${policyPath}`, `--hatch-webgl-allowed-domains-sha256=${policySha}`,
-  `--user-data-dir=${join(root, '.tmp', 'chrome')}`, '--window-size=1280,720', `http://127.0.0.1:${PORT}/?shot=none`,
+  `--user-data-dir=${join(root, '.tmp', 'chrome')}`, '--window-size=1280,720', 'about:blank',
 ], { stdio: 'ignore' });
 
 function shutdown(code) {
@@ -46,12 +50,11 @@ function shutdown(code) {
   process.exit(code);
 }
 
-async function connect() {
+async function waitForChrome() {
   for (let i = 0; i < 100; i += 1) {
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
-      const page = list.find((t) => t.type === 'page');
-      if (page) return page.webSocketDebuggerUrl;
+      await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json();
+      return;
     } catch {
       // Chrome is still starting.
     }
@@ -86,23 +89,32 @@ function client(url) {
   });
 }
 
-const cdp = await client(await connect());
+await waitForChrome();
 const errors = [];
-cdp.on((e) => {
-  if (e.method === 'Runtime.exceptionThrown') errors.push(e.params.exceptionDetails.exception?.description ?? e.params.exceptionDetails.text);
-  if (e.method === 'Runtime.consoleAPICalled' && e.params.type === 'error') errors.push(e.params.args.map((a) => a.value ?? a.description).join(' '));
-  if (e.method === 'Log.entryAdded' && e.params.entry.level === 'error') errors.push(`${e.params.entry.text} ${e.params.entry.url ?? ''}`);
-});
-await cdp.send('Runtime.enable');
-await cdp.send('Log.enable');
-await cdp.send('Page.enable');
-await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+let cdp = null;
+let tab = null;
 
 const evaluate = async (expression) => (await cdp.send('Runtime.evaluate', { expression, returnByValue: true })).result.value;
 
+/** Open the game at `query` in a fresh tab (closing the last one) and attach to it. */
 async function navigate(query) {
-  await cdp.send('Page.navigate', { url: `http://127.0.0.1:${PORT}/${query}` });
-  await sleep(300);
+  if (tab) await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/close/${tab.id}`);
+  const url = `${BASE}${query}`;
+  tab = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' })).json();
+  cdp = await client(tab.webSocketDebuggerUrl);
+  cdp.on((e) => {
+    if (e.method === 'Runtime.exceptionThrown') errors.push(e.params.exceptionDetails.exception?.description ?? e.params.exceptionDetails.text);
+    if (e.method === 'Runtime.consoleAPICalled' && e.params.type === 'error') errors.push(e.params.args.map((a) => a.value ?? a.description).join(' '));
+    if (e.method === 'Log.entryAdded' && e.params.entry.level === 'error') errors.push(`${e.params.entry.text} ${e.params.entry.url ?? ''}`);
+  });
+  if (process.env.DEBUG) console.log('opened', tab.url, await evaluate('location.href + " " + document.body.innerText.slice(0, 120)'));
+  await cdp.send('Runtime.enable');
+  await cdp.send('Log.enable');
+  await cdp.send('Page.enable');
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+  await sleep(800);
+  const href = await evaluate('location.href');
+  if (!href.startsWith(BASE.slice(0, 7))) throw new Error(`page failed to load: ${href} ${await evaluate('document.body.innerText')}`);
 }
 
 async function capture(path, quality = 90) {
@@ -118,7 +130,6 @@ async function capture(path, quality = 90) {
 }
 
 async function shots() {
-  if (process.env.DEBUG) console.log('start page:', await evaluate('location.href + " | " + document.title'));
   const list = JSON.parse(readFileSync(join(root, 'shots.json'), 'utf8'));
   for (const shot of list) {
     await navigate(shot.query);
@@ -187,8 +198,19 @@ async function play() {
     await sleep(150);
     console.log('after Esc again', (await state()).screen);
   }
+  // Stand idle and let the Hollow win, then check the end screen restarts a fresh run.
+  for (let i = 0; i < 240 && !['over', 'won'].includes((s = await state()).screen); i += 1) {
+    if (s.screen === 'upgrade') await tap('Digit1');
+    await sleep(500);
+  }
+  console.log('end screen', s);
+  await sleep(1500);
   await capture(join(root, '.tmp', 'play-3-end.jpg'));
-  console.log('final', await state());
+  await tap('Enter');
+  await sleep(300);
+  const restarted = await state();
+  console.log('after Enter', restarted);
+  if (!(s.screen === 'over' || s.screen === 'won') || restarted.screen !== 'play' || restarted.wave !== 1 || restarted.score !== 0) throw new Error('end screen did not restart a fresh run');
 }
 
 try {

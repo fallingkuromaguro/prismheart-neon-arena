@@ -8,13 +8,16 @@ import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE, SCREEN_UPGRADE, SCREEN_WON } fr
 
 const MAX_SECONDS = 900;
 
-/** Play `world` with the pilot until `done(state)` holds (or the run ends); returns whether it held. */
-function playUntil(world, skill, done) {
+/**
+ * Play `world` with the pilot until `done(state)` holds; returns whether it held. While `linger(state)`
+ * holds, the pilot leaves the card screen (or the end screen) up and lets the world run on.
+ */
+function playUntil(world, skill, done, linger = () => false) {
   for (let i = 0; i < MAX_SECONDS / STEP; i += 1) {
     const s = world.state;
     if (done(s)) return true;
-    if (s.phase === 'upgrade') world.chooseUpgrade(chooseCard(s));
-    else if (s.phase === 'lost' || s.phase === 'won') return false;
+    if (s.phase === 'upgrade' && !linger(s)) world.chooseUpgrade(chooseCard(s));
+    else if ((s.phase === 'lost' || s.phase === 'won') && !linger(s)) return false;
     world.step(STEP, autopilot(s, skill));
     world.takeEvents();
   }
@@ -36,15 +39,16 @@ export function stageShot(name, world) {
     return { screen: SCREEN_TITLE, ui: { best: 0 } };
   }
   if (name === 'upgrade') {
-    playUntil(world, 1, (s) => s.phase === 'upgrade' && s.waveIndex === 5 && s.phaseTime > 0.6);
+    const atCard = (s) => s.phase === 'upgrade' && s.waveIndex === 4;
+    playUntil(world, 1, (s) => atCard(s) && s.phaseTime > 0.8, atCard);
     return { screen: SCREEN_UPGRADE, ui: { hover: 1 } };
   }
   if (name === 'victory') {
-    playUntil(world, 1, (s) => s.phase === 'won' && s.phaseTime > 2.5);
+    playUntil(world, 1, (s) => s.phase === 'won' && s.phaseTime > 2.5, (s) => s.phase === 'won');
     return { screen: SCREEN_WON, ui: { newBest: true } };
   }
   if (name === 'over') {
-    playUntil(world, 0.4, (s) => s.phase === 'lost' && s.phaseTime > 1.5);
+    playUntil(world, 0.4, (s) => s.phase === 'lost' && s.phaseTime > 1.5, (s) => s.phase === 'lost');
     return { screen: SCREEN_OVER, ui: { newBest: false } };
   }
   // battle: deep into the last wave, the Null Choir mid-fight.
