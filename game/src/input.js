@@ -1,53 +1,88 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard and mouse. Held state (movement, aim, fire) is read every step; one-shot presses
+// (start, pause, dash, pulse, card keys) queue up until the loop takes them, so a tap shorter
+// than a frame is never lost.
+const MOVE_KEYS = { KeyW: [0, -1], KeyS: [0, 1], KeyA: [-1, 0], KeyD: [1, 0] };
+const AIM_KEYS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+const PRESS = {
+  Enter: 'confirm', NumpadEnter: 'confirm', Space: 'space', Escape: 'pause', KeyP: 'pause', KeyM: 'mute', KeyR: 'restart',
+  ShiftLeft: 'dash', ShiftRight: 'dash', Digit1: 'card1', Digit2: 'card2', Digit3: 'card3', Numpad1: 'card1', Numpad2: 'card2', Numpad3: 'card3',
+  KeyA: 'left', KeyD: 'right', ArrowLeft: 'left', ArrowRight: 'right',
+};
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
+export function createInput(canvas, toLogical) {
+  const held = new Set();
+  const presses = [];
+  const mouse = { x: 640, y: 200, down: false, moved: false, clicked: null };
+  let lastAim = 'mouse';
 
   window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
+    if (event.code === 'Space' || event.code.startsWith('Arrow')) event.preventDefault();
+    if (!event.repeat && PRESS[event.code]) presses.push(PRESS[event.code]);
+    if (AIM_KEYS[event.code]) lastAim = 'keys';
+    held.add(event.code);
   });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
+  window.addEventListener('keyup', (event) => held.delete(event.code));
   window.addEventListener('blur', () => {
-    left = false;
-    right = false;
+    held.clear();
+    mouse.down = false;
   });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+  canvas.addEventListener('pointermove', (event) => {
+    const p = toLogical(event.clientX, event.clientY);
+    mouse.x = p.x;
+    mouse.y = p.y;
+    mouse.moved = true;
+    lastAim = 'mouse';
+  });
+  canvas.addEventListener('pointerdown', (event) => {
+    const p = toLogical(event.clientX, event.clientY);
+    mouse.x = p.x;
+    mouse.y = p.y;
+    if (event.button === 0) {
+      mouse.down = true;
+      presses.push('click');
+      mouse.clicked = p;
+    } else if (event.button === 2) presses.push('dash');
+    canvas.setPointerCapture?.(event.pointerId);
+  });
+  canvas.addEventListener('pointerup', (event) => {
+    if (event.button === 0) mouse.down = false;
   });
 
+  function vector(map) {
+    let x = 0;
+    let y = 0;
+    for (const code of held) {
+      const v = map[code];
+      if (v) {
+        x += v[0];
+        y += v[1];
+      }
+    }
+    return { x, y };
+  }
+
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
+    mouse,
+    /** Everything pressed since the last call, oldest first. */
+    takePresses() {
+      return presses.splice(0, presses.length);
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
+    /** The control state for one simulation step, aimed from the Warden at (px, py). */
+    control(px, py) {
+      const move = vector(MOVE_KEYS);
+      const aimKeys = vector(AIM_KEYS);
+      const keyAiming = aimKeys.x !== 0 || aimKeys.y !== 0;
+      let aimX = mouse.x;
+      let aimY = mouse.y;
+      if (keyAiming || lastAim === 'keys') {
+        if (keyAiming) this.keyAim = { x: aimKeys.x, y: aimKeys.y };
+        const k = this.keyAim ?? { x: 0, y: -1 };
+        aimX = px + k.x * 200;
+        aimY = py + k.y * 200;
+      }
+      return { moveX: move.x, moveY: move.y, aimX, aimY, fire: mouse.down || keyAiming, dash: false, pulse: false };
     },
+    usingKeyAim: () => lastAim === 'keys',
   };
 }
